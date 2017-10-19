@@ -149,7 +149,7 @@ export class SubscriptionServer {
       if (this.keepAlive) {
         const keepAliveTimer = setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) {
-            this.sendMessage(connectionContext, undefined, MessageTypes.GQL_CONNECTION_KEEP_ALIVE, undefined);
+            this.sendKeepAlive(connectionContext);
           } else {
             clearInterval(keepAliveTimer);
           }
@@ -282,12 +282,7 @@ export class SubscriptionServer {
             );
 
             if (this.keepAlive) {
-              this.sendMessage(
-                connectionContext,
-                undefined,
-                MessageTypes.GQL_CONNECTION_KEEP_ALIVE,
-                undefined,
-              );
+              this.sendKeepAlive(connectionContext);
             }
           }).catch((error: Error) => {
             this.sendError(
@@ -459,6 +454,14 @@ export class SubscriptionServer {
           this.sendError(connectionContext, opId, { message: 'Invalid message type!' });
       }
     };
+  }
+
+  private sendKeepAlive(connectionContext: ConnectionContext): void {
+    if (connectionContext.isLegacy) {
+      this.sendMessage(connectionContext, undefined, MessageTypes.KEEP_ALIVE, undefined);
+    } else {
+      this.sendMessage(connectionContext, undefined, MessageTypes.GQL_CONNECTION_KEEP_ALIVE, undefined);
+    }
   }
 
   private sendMessage(connectionContext: ConnectionContext, opId: string, type: string, payload: any): void {
