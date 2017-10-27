@@ -145,17 +145,6 @@ export class SubscriptionServer {
       connectionContext.socket = socket;
       connectionContext.operations = {};
 
-      // Regular keep alive messages if keepAlive is set
-      if (this.keepAlive) {
-        const keepAliveTimer = setInterval(() => {
-          if (socket.readyState === WebSocket.OPEN) {
-            this.sendKeepAlive(connectionContext);
-          } else {
-            clearInterval(keepAliveTimer);
-          }
-        }, this.keepAlive);
-      }
-
       const connectionClosedHandler = (error: any) => {
         if (error) {
           this.sendError(
@@ -283,6 +272,14 @@ export class SubscriptionServer {
 
             if (this.keepAlive) {
               this.sendKeepAlive(connectionContext);
+              // Regular keep alive messages if keepAlive is set
+              const keepAliveTimer = setInterval(() => {
+                if (connectionContext.socket.readyState === WebSocket.OPEN) {
+                  this.sendKeepAlive(connectionContext);
+                } else {
+                  clearInterval(keepAliveTimer);
+                }
+              }, this.keepAlive);
             }
           }).catch((error: Error) => {
             this.sendError(

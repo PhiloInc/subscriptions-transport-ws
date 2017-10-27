@@ -1,6 +1,6 @@
 {
   "name": "@philo/subscriptions-transport-ws",
-  "version": "0.9.1-p1",
+  "version": "0.9.1-p2",
   "description": "A websocket transport for GraphQL subscriptions",
   "main": "dist/index.js",
   "browser": "dist/client.js",
@@ -29,7 +29,7 @@
     "coverage": "node ./node_modules/istanbul/lib/cli.js cover _mocha -- --full-trace ./dist/test/tests.js",
     "postcoverage": "remap-istanbul --input coverage/coverage.raw.json --type lcovonly --output coverage/lcov.info",
     "browser-compile": "webpack --config \"./unpkg-webpack.config.js\"",
-    "prepublishOnly": "npm run compile && npm run browser-compile && rimraf src",
+    "prepublishOnly": "npm run compile && npm run browser-compile",
     "postinstall": "node scripts/post-install.js"
   },
   "peerDependencies": {
