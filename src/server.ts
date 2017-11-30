@@ -224,12 +224,7 @@ export class SubscriptionServer {
   }
 
   private onMessage(connectionContext: ConnectionContext) {
-    let onInitResolve: any = null, onInitReject: any = null;
-
-    connectionContext.initPromise = new Promise((resolve, reject) => {
-      onInitResolve = resolve;
-      onInitReject = reject;
-    });
+    connectionContext.initPromise = Promise.resolve(true);
 
     return (message: any) => {
       let parsedMessage: OperationMessage;
@@ -243,20 +238,17 @@ export class SubscriptionServer {
       const opId = parsedMessage.id;
       switch (parsedMessage.type) {
         case MessageTypes.GQL_CONNECTION_INIT:
-          let onConnectPromise = Promise.resolve(true);
           if (this.onConnect) {
-            onConnectPromise = new Promise((resolve, reject) => {
-              try {
-                // TODO - this should become a function call with just 2 arguments in the future
-                // when we release the breaking change api: parsedMessage.payload and connectionContext
-                resolve(this.onConnect(parsedMessage.payload, connectionContext.socket, connectionContext));
-              } catch (e) {
-                reject(e);
-              }
-            });
+            try {
+              // TODO - this should become a function call with just 2 arguments in the future
+              // when we release the breaking change api: parsedMessage.payload and connectionContext
+              connectionContext.initPromise = Promise.resolve(
+                this.onConnect(parsedMessage.payload, connectionContext.socket, connectionContext),
+              );
+            } catch (e) {
+              connectionContext.initPromise = Promise.reject(e);
+            }
           }
-
-          onInitResolve(onConnectPromise);
 
           connectionContext.initPromise.then((result) => {
             if (result === false) {
