@@ -27,14 +27,15 @@ export interface ExecutionParams<TContext = any> {
   variables: { [key: string]: any };
   operationName: string | undefined;
   context: TContext;
-  formatResponse?: Function;
-  formatError?: Function;
-  callback?: Function;
+  formatResponse?: (executionResult: ExecutionResult, executionParams: ExecutionParams<TContext>) => ExecutionResult;
+  formatError?: (error: Error, executionParams: ExecutionParams<TContext>) => Error;
   schema?: GraphQLSchema;
 }
 
+export type InitPromiseResult<TContext = any> = boolean | TContext;
+
 export type ConnectionContext = {
-  initPromise: Promise<any>,
+  initPromise: Promise<InitPromiseResult>,
   isLegacy: boolean,
   socket: WebSocket,
   request: IncomingMessage,
@@ -78,6 +79,17 @@ export type SubscribeFunction = (schema: GraphQLSchema,
                                  AsyncIterator<ExecutionResult> |
                                  Promise<AsyncIterator<ExecutionResult> | ExecutionResult>;
 
+export type OnDisconnectFunction = (webSocket: WebSocket, connectionContext: ConnectionContext) => void;
+export type OnConnectFunction = (
+  payload: OperationMessagePayload | undefined,
+  webSocket: WebSocket,
+  connectionContext: ConnectionContext) => InitPromiseResult | Promise<InitPromiseResult>;
+export type OnOperationFunction = (
+  message: OperationMessage,
+  executionParams: ExecutionParams,
+  webSocket: WebSocket) => ExecutionParams | Promise<ExecutionParams>;
+export type OnOperationCompleteFunction = (webSocket: WebSocket, opId: string | undefined) => void;
+
 export interface ServerOptions {
   rootValue?: any;
   schema?: GraphQLSchema;
@@ -85,20 +97,20 @@ export interface ServerOptions {
   subscribe?: SubscribeFunction;
   validationRules?:
     Array<(context: ValidationContext) => any> | ReadonlyArray<any>;
-  onOperation?: Function;
-  onOperationComplete?: Function;
-  onConnect?: Function;
-  onDisconnect?: Function;
+  onOperation?: OnOperationFunction;
+  onOperationComplete?: OnOperationCompleteFunction;
+  onConnect?: OnConnectFunction;
+  onDisconnect?: OnDisconnectFunction;
   keepAlive?: number;
 }
 
 const isWebSocketServer = (socket: any) => socket.on;
 
 export class SubscriptionServer {
-  private onOperation: Function | undefined;
-  private onOperationComplete: Function | undefined;
-  private onConnect: Function | undefined;
-  private onDisconnect: Function | undefined;
+  private onOperation: OnOperationFunction | undefined;
+  private onOperationComplete: OnOperationCompleteFunction | undefined;
+  private onConnect: OnConnectFunction | undefined;
+  private onDisconnect: OnDisconnectFunction | undefined;
 
   private wsServer: WebSocket.Server;
   private execute: ExecuteFunction;
@@ -151,12 +163,13 @@ export class SubscriptionServer {
         return;
       }
 
-      const connectionContext: ConnectionContext = Object.create(null);
-      connectionContext.initPromise = Promise.resolve(true);
-      connectionContext.isLegacy = false;
-      connectionContext.socket = socket;
-      connectionContext.request = request;
-      connectionContext.operations = {};
+      const connectionContext: ConnectionContext = {
+        initPromise: Promise.resolve(true),
+        isLegacy: false,
+        socket: socket,
+        request: request,
+        operations: {},
+      };
 
       const connectionClosedHandler = (error: any) => {
         if (error) {
@@ -330,9 +343,6 @@ export class SubscriptionServer {
               variables: payload.variables || {},
               operationName: payload.operationName,
               context: isObject(initResult) ? Object.assign(Object.create(Object.getPrototypeOf(initResult)), initResult) : {},
-              formatResponse: <any>undefined,
-              formatError: <any>undefined,
-              callback: <any>undefined,
               schema: this.schema,
             };
             let promisedParams = Promise.resolve(baseParams);
@@ -360,7 +370,7 @@ export class SubscriptionServer {
                 throw new Error(error);
               }
 
-              const document = isString(baseParams.query) ?  parse(baseParams.query) : baseParams.query;
+              const document = isString(params.query) ?  parse(params.query) : params.query;
               let executionPromise: Promise<AsyncIterator<ExecutionResult> | ExecutionResult>;
               const validationErrors = validate(params.schema, document, this.specifiedRules);
 

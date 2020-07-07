@@ -1418,8 +1418,9 @@ describe('Server', function () {
 
     SubscriptionServer.create({
       execute,
-      onOperation: () => {
+      onOperation: (_, params) => {
         return {
+          ...params,
           schema,
         };
       },
@@ -1639,6 +1640,7 @@ describe('Server', function () {
             done();
           }, 500);
         }, 100);
+        return true;
       },
     }, { server: httpServerForError });
 
