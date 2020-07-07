@@ -35,13 +35,13 @@ export interface OperationOptions {
   [key: string]: any;
 }
 
-export type FormatedError = Error & {
+export type FormattedError = Error & {
   originalError?: any;
 };
 
 export interface Operation {
   options: OperationOptions;
-  handler: (error: Error[], result?: any) => void;
+  handler: (error: Error[] | null, result?: any) => void;
 }
 
 export interface Operations {
@@ -177,7 +177,7 @@ export class SubscriptionClient {
     const executeOperation = this.executeOperation.bind(this);
     const unsubscribe = this.unsubscribe.bind(this);
 
-    let opId: string;
+    let opId: string | null;
 
     this.clearInactivityTimeout();
 
@@ -418,11 +418,11 @@ export class SubscriptionClient {
     }
   }
 
-  private buildMessage(id: string, type: string, payload: any) {
+  private buildMessage(id: string | undefined, type: string, payload: any) {
     const payloadToReturn = payload && payload.query ?
       {
         ...payload,
-        query: typeof payload.query === 'string' ? payload.query : print(payload.query),
+        query: isString(payload.query) ? payload.query : print(payload.query),
       } :
       payload;
 
@@ -434,7 +434,7 @@ export class SubscriptionClient {
   }
 
   // ensure we have an array of errors
-  private formatErrors(errors: any): FormatedError[] {
+  private formatErrors(errors: any): FormattedError[] {
     if (Array.isArray(errors)) {
       return errors;
     }
@@ -456,7 +456,7 @@ export class SubscriptionClient {
     }];
   }
 
-  private sendMessage(id: string, type: string, payload: any) {
+  private sendMessage(id: string | undefined, type: string, payload: any) {
     this.sendMessageRaw(this.buildMessage(id, type, payload));
   }
 

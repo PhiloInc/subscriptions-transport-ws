@@ -18,13 +18,14 @@ import { createAsyncIterator, forAwaitEach, isAsyncIterable } from 'iterall';
 import { isASubscriptionOperation } from './utils/is-subscriptions';
 import { parseLegacyProtocolMessage } from './legacy/parse-legacy-protocol';
 import { IncomingMessage } from 'http';
+import isString from './utils/is-string';
 
 export type ExecutionIterator = AsyncIterator<ExecutionResult>;
 
 export interface ExecutionParams<TContext = any> {
   query: string | DocumentNode;
   variables: { [key: string]: any };
-  operationName: string;
+  operationName: string | undefined;
   context: TContext;
   formatResponse?: Function;
   formatError?: Function;
@@ -33,7 +34,7 @@ export interface ExecutionParams<TContext = any> {
 }
 
 export type ConnectionContext = {
-  initPromise?: Promise<any>,
+  initPromise: Promise<any>,
   isLegacy: boolean,
   socket: WebSocket,
   request: IncomingMessage,
@@ -94,17 +95,17 @@ export interface ServerOptions {
 const isWebSocketServer = (socket: any) => socket.on;
 
 export class SubscriptionServer {
-  private onOperation: Function;
-  private onOperationComplete: Function;
-  private onConnect: Function;
-  private onDisconnect: Function;
+  private onOperation: Function | undefined;
+  private onOperationComplete: Function | undefined;
+  private onConnect: Function | undefined;
+  private onDisconnect: Function | undefined;
 
   private wsServer: WebSocket.Server;
   private execute: ExecuteFunction;
-  private subscribe: SubscribeFunction;
-  private schema: GraphQLSchema;
+  private subscribe: SubscribeFunction | undefined;
+  private schema: GraphQLSchema | undefined;
   private rootValue: any;
-  private keepAlive: number;
+  private keepAlive: number | undefined;
   private closeHandler: () => void;
   private specifiedRules:
     Array<(context: ValidationContext) => any> |
@@ -212,9 +213,10 @@ export class SubscriptionServer {
   }
 
   private unsubscribe(connectionContext: ConnectionContext, opId: string) {
-    if (connectionContext.operations && connectionContext.operations[opId]) {
-      if (connectionContext.operations[opId].return) {
-        connectionContext.operations[opId].return();
+    const operation = connectionContext.operations[opId];
+    if (operation) {
+      if (operation.return) {
+        operation.return();
       }
 
       delete connectionContext.operations[opId];
@@ -237,19 +239,20 @@ export class SubscriptionServer {
       try {
         parsedMessage = parseLegacyProtocolMessage(connectionContext, JSON.parse(message));
       } catch (e) {
-        this.sendError(connectionContext, null, { message: e.message }, MessageTypes.GQL_CONNECTION_ERROR);
+        this.sendError(connectionContext, undefined, { message: e.message }, MessageTypes.GQL_CONNECTION_ERROR);
         return;
       }
 
-      const opId = parsedMessage.id;
-      switch (parsedMessage.type) {
+      const { id: opId, payload, type } = parsedMessage;
+      switch (type) {
         case MessageTypes.GQL_CONNECTION_INIT:
-          if (this.onConnect) {
+          const onConnect = this.onConnect;
+          if (onConnect) {
             connectionContext.initPromise = new Promise((resolve, reject) => {
               try {
                 // TODO - this should become a function call with just 2 arguments in the future
                 // when we release the breaking change api: parsedMessage.payload and connectionContext
-                resolve(this.onConnect(parsedMessage.payload, connectionContext.socket, connectionContext));
+                resolve(onConnect(payload, connectionContext.socket, connectionContext));
               } catch (e) {
                 reject(e);
               }
@@ -303,6 +306,19 @@ export class SubscriptionServer {
           break;
 
         case MessageTypes.GQL_START:
+          if (!isString(opId)) {
+            this.sendError(connectionContext, opId, { message: 'opId missing' });
+            return;
+          }
+          if (!payload) {
+            this.sendError(connectionContext, opId, { message: 'payload missing' });
+            return;
+          }
+          const { query } = payload;
+          if (!query) {
+            this.sendError(connectionContext, opId, { message: 'query missing' });
+            return;
+          }
           connectionContext.initPromise.then((initResult) => {
             // if we already have a subscription with this id, unsubscribe from it first
             if (connectionContext.operations && connectionContext.operations[opId]) {
@@ -310,9 +326,9 @@ export class SubscriptionServer {
             }
 
             const baseParams: ExecutionParams = {
-              query: parsedMessage.payload.query,
-              variables: parsedMessage.payload.variables,
-              operationName: parsedMessage.payload.operationName,
+              query,
+              variables: payload.variables || {},
+              operationName: payload.operationName,
               context: isObject(initResult) ? Object.assign(Object.create(Object.getPrototypeOf(initResult)), initResult) : {},
               formatResponse: <any>undefined,
               formatError: <any>undefined,
@@ -325,12 +341,11 @@ export class SubscriptionServer {
             connectionContext.operations[opId] = createEmptyIterable();
 
             if (this.onOperation) {
-              let messageForCallback: any = parsedMessage;
-              promisedParams = Promise.resolve(this.onOperation(messageForCallback, baseParams, connectionContext.socket));
+              promisedParams = Promise.resolve(this.onOperation(parsedMessage, baseParams, connectionContext.socket));
             }
 
             promisedParams.then((params) => {
-              if (typeof params !== 'object') {
+              if (!isObject(params)) {
                 const error = `Invalid params returned from onOperation! return values must be an object!`;
                 this.sendError(connectionContext, opId, { message: error });
 
@@ -345,7 +360,7 @@ export class SubscriptionServer {
                 throw new Error(error);
               }
 
-              const document = typeof baseParams.query !== 'string' ? baseParams.query : parse(baseParams.query);
+              const document = isString(baseParams.query) ?  parse(baseParams.query) : baseParams.query;
               let executionPromise: Promise<AsyncIterator<ExecutionResult> | ExecutionResult>;
               const validationErrors = validate(params.schema, document, this.specifiedRules);
 
@@ -435,6 +450,10 @@ export class SubscriptionServer {
 
         case MessageTypes.GQL_STOP:
           // Find subscription id. Call unsubscribe.
+          if (!isString(opId)) {
+            this.sendError(connectionContext, opId, { message: 'opId missing' });
+            return;
+          }
           this.unsubscribe(connectionContext, opId);
           break;
 
@@ -452,7 +471,7 @@ export class SubscriptionServer {
     }
   }
 
-  private sendMessage(connectionContext: ConnectionContext, opId: string, type: string, payload: any): void {
+  private sendMessage(connectionContext: ConnectionContext, opId: string | undefined, type: string, payload: any): void {
     const parsedMessage = parseLegacyProtocolMessage(connectionContext, {
       type,
       id: opId,
@@ -464,7 +483,7 @@ export class SubscriptionServer {
     }
   }
 
-  private sendError(connectionContext: ConnectionContext, opId: string, errorPayload: any,
+  private sendError(connectionContext: ConnectionContext, opId: string | undefined, errorPayload: any,
                     overrideDefaultErrorType?: string): void {
     const sanitizedOverrideDefaultErrorType = overrideDefaultErrorType || MessageTypes.GQL_ERROR;
     if ([

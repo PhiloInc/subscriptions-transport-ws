@@ -8,7 +8,7 @@ import {
 } from 'chai';
 import * as sinon from 'sinon';
 import * as WebSocket from 'ws';
-import { specifiedRules, execute, subscribe } from 'graphql';
+import { specifiedRules, execute, subscribe, ExecutionResult } from 'graphql';
 
 Object.assign(global, {
   WebSocket: WebSocket,
@@ -167,7 +167,7 @@ const subscriptionsSchema = new GraphQLSchema({
 // indirect call to support spying
 const handlers = {
   onOperation: (msg: OperationMessage, params: ExecutionParams<any>, webSocketRequest: WebSocket) => {
-    return Promise.resolve(Object.assign({}, params, { context: msg.payload.context }));
+    return Promise.resolve(Object.assign({}, params, { context: msg.payload!.context }));
   },
 };
 
@@ -185,7 +185,7 @@ const eventsOptions = {
   subscribe,
   execute,
   onOperation: sinon.spy((msg: OperationMessage, params: ExecutionParams<any>, webSocketRequest: WebSocket) => {
-    return Promise.resolve(Object.assign({}, params, { context: msg.payload.context }));
+    return Promise.resolve(Object.assign({}, params, { context: msg.payload!.context }));
   }),
   onOperationComplete: sinon.spy(),
   onConnect: sinon.spy(() => {
@@ -232,7 +232,7 @@ new SubscriptionServer(Object.assign({}, options, {
   onOperation: (msg: OperationMessage, params: ExecutionParams<any>): Promise<any> => {
     return new Promise((resolve, reject) => {
       setTimeout(() => {
-        resolve(Object.assign({}, params, { context: msg.payload.context }));
+        resolve(Object.assign({}, params, { context: msg.payload!.context }));
       }, 100);
     });
   },
@@ -1001,7 +1001,7 @@ describe('Client', function () {
   it('should resubscribe after reconnect', function (done) {
     let connections = 0;
     let sub: any;
-    let client: SubscriptionClient = null;
+    let client: SubscriptionClient;
     wsServer.on('connection', (connection: WebSocket) => {
       connections += 1;
       connection.on('message', (message: any) => {
@@ -1583,7 +1583,7 @@ describe('Server', function () {
           return Promise.resolve({ value: { data: { testString: 'value' } }, done: false });
         },
         return() {
-          return Promise.resolve({ value: undefined, done: true });
+          return Promise.resolve({ value: {}, done: true });
         },
         throw(e: Error) {
           return Promise.reject(e);
@@ -2270,7 +2270,7 @@ describe('Client<->Server Flow', () => {
                 next: (res) => {
                   expect(sub2).not.to.eq(null);
                   expect(res.errors).to.equals(undefined);
-                  expect(res.data.testString).to.eq('value');
+                  expect(res.data!.testString).to.eq('value');
                   sub2.unsubscribe();
                   done();
                 },
@@ -2315,7 +2315,7 @@ describe('Client<->Server Flow', () => {
             next: (res) => {
               expect(sub).not.to.eq(null);
               expect(res.errors).to.equals(undefined);
-              expect(res.data.testString).to.eq('value');
+              expect(res.data!.testString).to.eq('value');
 
               sub.unsubscribe();
               done();
@@ -2361,7 +2361,7 @@ describe('Client<->Server Flow', () => {
               expect(sub).not.to.eq(null);
 
               expect(res.data).to.eq(undefined);
-              expect(res.errors[0].message).to.eq(
+              expect(res.errors![0].message).to.eq(
                 'Cannot query field "invalid" on type "Query".',
               );
 
@@ -2577,7 +2577,7 @@ describe('Client<->Server Flow', () => {
               assert(sRes.errors === undefined, 'unexpected error from 1st subscription');
               assert(sRes.data, 'unexpected null from 1st subscription result');
               expect(Object.keys(client['operations']).length).to.eq(1);
-              expect(sRes.data.user.id).to.eq('3');
+              expect(sRes.data!.user.id).to.eq('3');
               firstSubscriptionSpy();
 
               firstSub.unsubscribe();
@@ -2594,7 +2594,7 @@ describe('Client<->Server Flow', () => {
                   next: (s2Res) => {
                     assert(s2Res.errors === undefined, 'unexpected error from 2nd subscription');
                     assert(s2Res.data !== null, 'unexpected null from 2nd subscription result');
-                    expect(s2Res.data.user.id).to.eq('1');
+                    expect(s2Res.data!.user.id).to.eq('1');
                     expect(Object.keys(client['operations']).length).to.eq(1);
                     expect(firstSubscriptionSpy.callCount).to.eq(1);
 

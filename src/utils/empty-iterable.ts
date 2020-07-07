@@ -1,5 +1,3 @@
-import { $$asyncIterator } from 'iterall';
-
 export const createEmptyIterable = (): AsyncIterator<any> => {
   return {
     next() {
@@ -10,9 +8,6 @@ export const createEmptyIterable = (): AsyncIterator<any> => {
     },
     throw(e: Error) {
       return Promise.reject(e);
-    },
-    [$$asyncIterator]() {
-      return this;
     },
   };
 };
