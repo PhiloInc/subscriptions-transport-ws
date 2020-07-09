@@ -225,9 +225,6 @@ export class SubscriptionServer {
   private unsubscribe(connectionContext: ConnectionContext, opId: string) {
     const operationContext = connectionContext.operations.get(opId);
     if (operationContext) {
-      if (operationContext.messageQueue.length === 0) {
-        connectionContext.operations.delete(opId);
-      }
       const { executionIterator } = operationContext;
       if (executionIterator && executionIterator.return) {
         executionIterator.return();
@@ -300,11 +297,13 @@ export class SubscriptionServer {
         );
       }
       const executionResult = await executionPromise;
-      const executionIterable = isAsyncIterable(executionResult) ? executionResult : createAsyncIterator([executionResult]);
+      const executionIterator = isAsyncIterable(executionResult) ? executionResult : createAsyncIterator([executionResult]);
+      // DR: if a client issued two start requests for the same opId,
+      // at this point we allow the 2nd request to replace the first
       if (operationContext.executionIterator) {
         this.unsubscribe(connectionContext, opId);
       }
-      operationContext.executionIterator = executionIterable as ExecutionIterator;
+      operationContext.executionIterator = executionIterator as ExecutionIterator;
       // NOTE: This is a temporary code to support the legacy protocol.
       // As soon as the old protocol has been removed, this code should also be removed.
       this.sendMessage(connectionContext, opId, MessageTypes.SUBSCRIPTION_SUCCESS, undefined);
@@ -312,7 +311,7 @@ export class SubscriptionServer {
       nextTick(() => {
         this.processQueue(connectionContext, opId);
       });
-      await forAwaitEach(executionIterable as any, (value: ExecutionResult) => {
+      await forAwaitEach(executionIterator as any, (value: ExecutionResult) => {
         let result = value;
 
         if (params.formatResponse) {
@@ -361,13 +360,18 @@ export class SubscriptionServer {
       this.unsubscribe(connectionContext, opId);
       return;
     }
-    // START
-    this.processStart(connectionContext, operationContext, opId, message).catch(error => {
-      operationContext.processingStart = false;
-      nextTick(() => {
-        this.processQueue(connectionContext, opId);
+    if (type === MessageTypes.GQL_START) {
+      this.processStart(connectionContext, operationContext, opId, message).catch(error => {
+        operationContext.processingStart = false;
+        nextTick(() => {
+          this.processQueue(connectionContext, opId);
+        });
+        this.sendError(connectionContext, opId, { message: error.message });
       });
-      this.sendError(connectionContext, opId, { message: error.message });
+      return;
+    }
+    nextTick(() => {
+      this.processQueue(connectionContext, opId);
     });
   }
 
