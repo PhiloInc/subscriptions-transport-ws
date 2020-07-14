@@ -398,7 +398,9 @@ export class SubscriptionServer {
         return;
       }
 
-      const { id: opId, payload, type } = parsedMessage;
+      const { id, payload, type } = parsedMessage;
+      // DR: Force id to be a string
+      const opId = String(id);
       switch (type) {
         case MessageTypes.GQL_CONNECTION_INIT:
           const onConnect = this.onConnect;
@@ -453,23 +455,11 @@ export class SubscriptionServer {
           break;
 
         case MessageTypes.GQL_START:
-          if (!isString(opId)) {
-            this.sendError(connectionContext, opId, {
-              message: 'opId missing',
-            });
-            return;
-          }
           this.queueMessage(connectionContext, opId, parsedMessage);
           break;
 
         case MessageTypes.GQL_STOP:
           // Find subscription id. Call unsubscribe.
-          if (!isString(opId)) {
-            this.sendError(connectionContext, opId, {
-              message: 'opId missing',
-            });
-            return;
-          }
           this.queueMessage(connectionContext, opId, parsedMessage);
           break;
 
