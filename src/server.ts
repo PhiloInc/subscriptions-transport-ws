@@ -250,6 +250,11 @@ export class SubscriptionServer {
   ) {
     try {
       operationContext.processingStart = true;
+      // DR: if a client issued two start requests for the same opId,
+      // at this point we allow the 2nd request to replace the first
+      if (operationContext.executionIterator) {
+        this.unsubscribe(connectionContext, opId);
+      }
       const { payload } = message;
       if (!payload) {
         throw new Error('Payload missing');
@@ -298,11 +303,6 @@ export class SubscriptionServer {
       }
       const executionResult = await executionPromise;
       const executionIterator = isAsyncIterable(executionResult) ? executionResult : createAsyncIterator([executionResult]);
-      // DR: if a client issued two start requests for the same opId,
-      // at this point we allow the 2nd request to replace the first
-      if (operationContext.executionIterator) {
-        this.unsubscribe(connectionContext, opId);
-      }
       operationContext.executionIterator = executionIterator as ExecutionIterator;
       // NOTE: This is a temporary code to support the legacy protocol.
       // As soon as the old protocol has been removed, this code should also be removed.
