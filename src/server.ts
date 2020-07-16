@@ -32,6 +32,8 @@ export interface ExecutionParams<TContext = any> {
   schema?: GraphQLSchema;
 }
 
+type OperationId = string | number;
+
 export type InitPromiseResult<TContext = any> = boolean | TContext;
 
 export type OperationContext = {
@@ -45,7 +47,7 @@ export type ConnectionContext = {
   isLegacy: boolean;
   socket: WebSocket;
   request: IncomingMessage;
-  operations: Map<string, OperationContext>;
+  operations: Map<OperationId, OperationContext>;
 };
 
 export interface OperationMessagePayload {
@@ -57,7 +59,7 @@ export interface OperationMessagePayload {
 
 export interface OperationMessage {
   payload?: OperationMessagePayload;
-  id?: string;
+  id?: OperationId;
   type: string;
 }
 
@@ -93,7 +95,7 @@ export type OnOperationFunction = (
   executionParams: ExecutionParams,
   webSocket: WebSocket,
 ) => ExecutionParams | Promise<ExecutionParams>;
-export type OnOperationCompleteFunction = (webSocket: WebSocket, opId: string | undefined) => void;
+export type OnOperationCompleteFunction = (webSocket: WebSocket, opId: OperationId) => void;
 
 export interface ServerOptions {
   rootValue?: any;
@@ -222,7 +224,7 @@ export class SubscriptionServer {
     this.subscribe = subscribe;
   }
 
-  private unsubscribe(connectionContext: ConnectionContext, opId: string) {
+  private unsubscribe(connectionContext: ConnectionContext, opId: OperationId) {
     const operationContext = connectionContext.operations.get(opId);
     if (operationContext) {
       const { executionIterator } = operationContext;
@@ -245,7 +247,7 @@ export class SubscriptionServer {
   private async processStart(
     connectionContext: ConnectionContext,
     operationContext: OperationContext,
-    opId: string,
+    opId: OperationId,
     message: OperationMessage,
   ) {
     try {
@@ -343,7 +345,7 @@ export class SubscriptionServer {
     }
   }
 
-  private processQueue(connectionContext: ConnectionContext, opId: string) {
+  private processQueue(connectionContext: ConnectionContext, opId: OperationId) {
     const operationContext = connectionContext.operations.get(opId);
     if (!operationContext || operationContext.processingStart) {
       return;
@@ -375,7 +377,7 @@ export class SubscriptionServer {
     });
   }
 
-  private queueMessage(connectionContext: ConnectionContext, opId: string, message: OperationMessage) {
+  private queueMessage(connectionContext: ConnectionContext, opId: OperationId, message: OperationMessage) {
     let operationContext = connectionContext.operations.get(opId);
     if (!operationContext) {
       operationContext = {
@@ -398,9 +400,7 @@ export class SubscriptionServer {
         return;
       }
 
-      const { id, payload, type } = parsedMessage;
-      // DR: Force id to be a string
-      const opId = String(id);
+      const { id: opId, payload, type } = parsedMessage;
       switch (type) {
         case MessageTypes.GQL_CONNECTION_INIT:
           const onConnect = this.onConnect;
@@ -455,11 +455,22 @@ export class SubscriptionServer {
           break;
 
         case MessageTypes.GQL_START:
+          if (opId == null) {
+            this.sendError(connectionContext, opId, {
+              message: 'Invalid opId!',
+            });
+            break;
+          }
           this.queueMessage(connectionContext, opId, parsedMessage);
           break;
 
         case MessageTypes.GQL_STOP:
-          // Find subscription id. Call unsubscribe.
+          if (opId == null) {
+            this.sendError(connectionContext, opId, {
+              message: 'Invalid opId!',
+            });
+            break;
+          }
           this.queueMessage(connectionContext, opId, parsedMessage);
           break;
 
@@ -479,7 +490,7 @@ export class SubscriptionServer {
     }
   }
 
-  private sendMessage(connectionContext: ConnectionContext, opId: string | undefined, type: string, payload: any): void {
+  private sendMessage(connectionContext: ConnectionContext, opId: OperationId | undefined, type: string, payload: any): void {
     const parsedMessage = parseLegacyProtocolMessage(connectionContext, {
       type,
       id: opId,
@@ -493,7 +504,7 @@ export class SubscriptionServer {
 
   private sendError(
     connectionContext: ConnectionContext,
-    opId: string | undefined,
+    opId: OperationId | undefined,
     errorPayload: any,
     overrideDefaultErrorType?: string,
   ): void {
