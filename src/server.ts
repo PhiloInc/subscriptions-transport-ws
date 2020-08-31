@@ -20,7 +20,10 @@ import isString from './utils/is-string';
 import { isASubscriptionOperation } from './utils/is-subscriptions';
 
 export type ExecutionIterator = AsyncIterator<ExecutionResult>;
-export type FormatErrorFunction<TContext = any> = (error: Error, executionParams: ExecutionParams<TContext>) => Error;
+interface ErrorMessage  {
+  message: string;
+}
+export type ErrorLogger = (webSocket: WebSocket, opId: OperationId | undefined, errorPayload: ErrorMessage | ErrorMessage[]) => void;
 
 export interface ExecutionParams<TContext = any> {
   query: string | DocumentNode;
@@ -28,7 +31,6 @@ export interface ExecutionParams<TContext = any> {
   operationName: string | undefined;
   context: TContext;
   formatResponse?: (executionResult: ExecutionResult, executionParams: ExecutionParams<TContext>) => ExecutionResult;
-  formatError?: FormatErrorFunction<TContext>;
   schema?: GraphQLSchema;
 }
 
@@ -108,6 +110,7 @@ export interface ServerOptions {
   onConnect?: OnConnectFunction;
   onDisconnect?: OnDisconnectFunction;
   keepAlive?: number;
+  errorLogger?: ErrorLogger;
 }
 
 const isWebSocketServer = (socket: any) => socket.on;
@@ -126,13 +129,14 @@ export class SubscriptionServer {
   private keepAlive: number | undefined;
   private closeHandler: () => void;
   private specifiedRules: Array<(context: ValidationContext) => any> | ReadonlyArray<any>;
+  private errorLogger: ErrorLogger | undefined;
 
   public static create(options: ServerOptions, socketOptionsOrServer: WebSocket.ServerOptions | WebSocket.Server) {
     return new SubscriptionServer(options, socketOptionsOrServer);
   }
 
   constructor(options: ServerOptions, socketOptionsOrServer: WebSocket.ServerOptions | WebSocket.Server) {
-    const { onOperation, onOperationComplete, onConnect, onDisconnect, keepAlive } = options;
+    const { onOperation, onOperationComplete, onConnect, onDisconnect, keepAlive, errorLogger } = options;
 
     this.specifiedRules = options.validationRules || specifiedRules;
     this.loadExecutor(options);
@@ -142,6 +146,7 @@ export class SubscriptionServer {
     this.onConnect = onConnect;
     this.onDisconnect = onDisconnect;
     this.keepAlive = keepAlive;
+    this.errorLogger = errorLogger;
 
     if (isWebSocketServer(socketOptionsOrServer)) {
       this.wsServer = <WebSocket.Server>socketOptionsOrServer;
@@ -320,7 +325,7 @@ export class SubscriptionServer {
           try {
             result = params.formatResponse(value, params);
           } catch (err) {
-            console.error('Error in formatError function:', err);
+            console.error('Error in formatResponse function:', err);
           }
         }
         this.sendMessage(connectionContext, opId, MessageTypes.GQL_DATA, result);
@@ -491,6 +496,9 @@ export class SubscriptionServer {
   }
 
   private sendMessage(connectionContext: ConnectionContext, opId: OperationId | undefined, type: string, payload: any): void {
+    if (type === MessageTypes.GQL_DATA && payload && payload.errors && this.errorLogger) {
+      this.errorLogger(connectionContext.socket, opId, payload.errors);
+    }
     const parsedMessage = parseLegacyProtocolMessage(connectionContext, {
       type,
       id: opId,
@@ -505,14 +513,16 @@ export class SubscriptionServer {
   private sendError(
     connectionContext: ConnectionContext,
     opId: OperationId | undefined,
-    errorPayload: any,
+    errorPayload: ErrorMessage,
     overrideDefaultErrorType?: string,
   ): void {
     const sanitizedOverrideDefaultErrorType = overrideDefaultErrorType || MessageTypes.GQL_ERROR;
     if ([MessageTypes.GQL_CONNECTION_ERROR, MessageTypes.GQL_ERROR].indexOf(sanitizedOverrideDefaultErrorType) === -1) {
       throw new Error('overrideDefaultErrorType should be one of the allowed error messages' + ' GQL_CONNECTION_ERROR or GQL_ERROR');
     }
-
+    if (this.errorLogger) {
+      this.errorLogger(connectionContext.socket, opId, errorPayload);
+    }
     this.sendMessage(connectionContext, opId, sanitizedOverrideDefaultErrorType, errorPayload);
   }
 }
