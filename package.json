@@ -1,6 +1,6 @@
 {
   "name": "@philo/subscriptions-transport-ws",
-  "version": "0.9.16-p6",
+  "version": "0.9.16-p7",
   "description": "A websocket transport for GraphQL subscriptions",
   "main": "dist/index.js",
   "browser": "dist/client.js",

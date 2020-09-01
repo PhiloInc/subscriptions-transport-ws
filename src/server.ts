@@ -534,7 +534,7 @@ export class SubscriptionServer {
         console.error(`Error in formatError function: ${error.message}`);
       }
     }
-    this.sendMessage(connectionContext, opId, type, payload);
+    this.sendMessage(connectionContext, opId, type, formattedPayload);
   }
 
   private sendError(
