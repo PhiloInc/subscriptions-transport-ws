@@ -1,7 +1,10 @@
 import {
   DocumentNode,
   ExecutionResult,
+  FormattedExecutionResult,
+  GraphQLError,
   GraphQLFieldResolver,
+  GraphQLFormattedError,
   GraphQLSchema,
   parse,
   specifiedRules,
@@ -20,10 +23,11 @@ import isString from './utils/is-string';
 import { isASubscriptionOperation } from './utils/is-subscriptions';
 
 export type ExecutionIterator = AsyncIterator<ExecutionResult>;
-interface ErrorMessage  {
+export type FormatErrorFunction = (webSocket: WebSocket, opId: OperationId | undefined, error: GraphQLError) => GraphQLFormattedError;
+
+interface ErrorResult {
   message: string;
 }
-export type ErrorLogger = (webSocket: WebSocket, opId: OperationId | undefined, errorPayload: ErrorMessage | ErrorMessage[]) => void;
 
 export interface ExecutionParams<TContext = any> {
   query: string | DocumentNode;
@@ -110,7 +114,7 @@ export interface ServerOptions {
   onConnect?: OnConnectFunction;
   onDisconnect?: OnDisconnectFunction;
   keepAlive?: number;
-  errorLogger?: ErrorLogger;
+  formatError?: FormatErrorFunction;
 }
 
 const isWebSocketServer = (socket: any) => socket.on;
@@ -129,14 +133,14 @@ export class SubscriptionServer {
   private keepAlive: number | undefined;
   private closeHandler: () => void;
   private specifiedRules: Array<(context: ValidationContext) => any> | ReadonlyArray<any>;
-  private errorLogger: ErrorLogger | undefined;
+  private formatError: FormatErrorFunction | undefined;
 
   public static create(options: ServerOptions, socketOptionsOrServer: WebSocket.ServerOptions | WebSocket.Server) {
     return new SubscriptionServer(options, socketOptionsOrServer);
   }
 
   constructor(options: ServerOptions, socketOptionsOrServer: WebSocket.ServerOptions | WebSocket.Server) {
-    const { onOperation, onOperationComplete, onConnect, onDisconnect, keepAlive, errorLogger } = options;
+    const { onOperation, onOperationComplete, onConnect, onDisconnect, keepAlive, formatError } = options;
 
     this.specifiedRules = options.validationRules || specifiedRules;
     this.loadExecutor(options);
@@ -146,7 +150,7 @@ export class SubscriptionServer {
     this.onConnect = onConnect;
     this.onDisconnect = onDisconnect;
     this.keepAlive = keepAlive;
-    this.errorLogger = errorLogger;
+    this.formatError = formatError;
 
     if (isWebSocketServer(socketOptionsOrServer)) {
       this.wsServer = <WebSocket.Server>socketOptionsOrServer;
@@ -180,15 +184,21 @@ export class SubscriptionServer {
         operations: new Map(),
       };
 
-      const connectionClosedHandler = (error: any) => {
-        if (error) {
-          this.sendError(connectionContext, '', { message: error.message ? error.message : error }, MessageTypes.GQL_CONNECTION_ERROR);
+      const connectionErrorHandler = (error: Error) => {
+        this.sendError(
+          connectionContext,
+          undefined,
+          new GraphQLError(error.message, undefined, undefined, undefined, undefined, error),
+          MessageTypes.GQL_CONNECTION_ERROR,
+        );
 
-          setTimeout(() => {
-            // 1011 is an unexpected condition prevented the request from being fulfilled
-            connectionContext.socket.close(1011);
-          }, 10);
-        }
+        setTimeout(() => {
+          // 1011 is an unexpected condition prevented the request from being fulfilled
+          connectionContext.socket.close(1011);
+        }, 10);
+      };
+
+      const connectionClosedHandler = () => {
         this.onClose(connectionContext);
 
         if (this.onDisconnect) {
@@ -196,7 +206,7 @@ export class SubscriptionServer {
         }
       };
 
-      socket.on('error', connectionClosedHandler);
+      socket.on('error', connectionErrorHandler);
       socket.on('close', connectionClosedHandler);
       socket.on('message', this.onMessage(connectionContext));
     };
@@ -328,9 +338,9 @@ export class SubscriptionServer {
             console.error('Error in formatResponse function:', err);
           }
         }
-        this.sendMessage(connectionContext, opId, MessageTypes.GQL_DATA, result);
+        this.sendResult(connectionContext, opId, MessageTypes.GQL_DATA, result);
       });
-      this.sendMessage(connectionContext, opId, MessageTypes.GQL_COMPLETE, null);
+      this.sendMessage(connectionContext, opId, MessageTypes.GQL_COMPLETE, undefined);
       nextTick(() => {
         this.processQueue(connectionContext, opId);
       });
@@ -340,11 +350,9 @@ export class SubscriptionServer {
         this.processQueue(connectionContext, opId);
       });
       if (error.errors) {
-        this.sendMessage(connectionContext, opId, MessageTypes.GQL_DATA, {
-          errors: error.errors,
-        });
+        this.sendResult(connectionContext, opId, MessageTypes.GQL_DATA, error);
       } else {
-        this.sendError(connectionContext, opId, { message: error.message });
+        this.sendError(connectionContext, opId, new GraphQLError(error.message, undefined, undefined, undefined, undefined, error));
       }
       this.unsubscribe(connectionContext, opId);
     }
@@ -373,7 +381,7 @@ export class SubscriptionServer {
         nextTick(() => {
           this.processQueue(connectionContext, opId);
         });
-        this.sendError(connectionContext, opId, { message: error.message });
+        this.sendError(connectionContext, opId, new GraphQLError(error.message, undefined, undefined, undefined, undefined, error));
       });
       return;
     }
@@ -401,7 +409,12 @@ export class SubscriptionServer {
       try {
         parsedMessage = parseLegacyProtocolMessage(connectionContext, JSON.parse(message));
       } catch (e) {
-        this.sendError(connectionContext, undefined, { message: e.message }, MessageTypes.GQL_CONNECTION_ERROR);
+        this.sendError(
+          connectionContext,
+          undefined,
+          new GraphQLError(e.message, undefined, undefined, undefined, undefined, e),
+          MessageTypes.GQL_CONNECTION_ERROR,
+        );
         return;
       }
 
@@ -442,7 +455,12 @@ export class SubscriptionServer {
               }
             })
             .catch((error: Error) => {
-              this.sendError(connectionContext, opId, { message: error.message }, MessageTypes.GQL_CONNECTION_ERROR);
+              this.sendError(
+                connectionContext,
+                opId,
+                new GraphQLError(error.message, undefined, undefined, undefined, undefined, error),
+                MessageTypes.GQL_CONNECTION_ERROR,
+              );
 
               // Close the connection with an error code, ws v2 ensures that the
               // connection is cleaned up even when the closing handshake fails.
@@ -461,9 +479,7 @@ export class SubscriptionServer {
 
         case MessageTypes.GQL_START:
           if (opId == null) {
-            this.sendError(connectionContext, opId, {
-              message: 'Invalid opId!',
-            });
+            this.sendError(connectionContext, opId, new GraphQLError('Invalid start opId!'));
             break;
           }
           this.queueMessage(connectionContext, opId, parsedMessage);
@@ -471,18 +487,14 @@ export class SubscriptionServer {
 
         case MessageTypes.GQL_STOP:
           if (opId == null) {
-            this.sendError(connectionContext, opId, {
-              message: 'Invalid opId!',
-            });
+            this.sendError(connectionContext, opId, new GraphQLError('Invalid stop opId!'));
             break;
           }
           this.queueMessage(connectionContext, opId, parsedMessage);
           break;
 
         default:
-          this.sendError(connectionContext, opId, {
-            message: 'Invalid message type!',
-          });
+          this.sendError(connectionContext, opId, new GraphQLError('Invalid message type!'));
       }
     };
   }
@@ -495,10 +507,12 @@ export class SubscriptionServer {
     }
   }
 
-  private sendMessage(connectionContext: ConnectionContext, opId: OperationId | undefined, type: string, payload: any): void {
-    if (type === MessageTypes.GQL_DATA && payload && payload.errors && this.errorLogger) {
-      this.errorLogger(connectionContext.socket, opId, payload.errors);
-    }
+  private sendMessage(
+    connectionContext: ConnectionContext,
+    opId: OperationId | undefined,
+    type: string,
+    payload: FormattedExecutionResult | ErrorResult | undefined,
+  ): void {
     const parsedMessage = parseLegacyProtocolMessage(connectionContext, {
       type,
       id: opId,
@@ -510,19 +524,37 @@ export class SubscriptionServer {
     }
   }
 
+  private sendResult(connectionContext: ConnectionContext, opId: OperationId, type: string, payload: ExecutionResult) {
+    let formattedPayload: FormattedExecutionResult = payload;
+    if (this.formatError && payload.errors) {
+      const formatError = this.formatError;
+      try {
+        formattedPayload.errors = payload.errors.map(error => formatError(connectionContext.socket, opId, error));
+      } catch (error) {
+        console.error(`Error in formatError function: ${error.message}`);
+      }
+    }
+    this.sendMessage(connectionContext, opId, type, payload);
+  }
+
   private sendError(
     connectionContext: ConnectionContext,
     opId: OperationId | undefined,
-    errorPayload: ErrorMessage,
+    error: GraphQLError,
     overrideDefaultErrorType?: string,
   ): void {
     const sanitizedOverrideDefaultErrorType = overrideDefaultErrorType || MessageTypes.GQL_ERROR;
     if ([MessageTypes.GQL_CONNECTION_ERROR, MessageTypes.GQL_ERROR].indexOf(sanitizedOverrideDefaultErrorType) === -1) {
       throw new Error('overrideDefaultErrorType should be one of the allowed error messages' + ' GQL_CONNECTION_ERROR or GQL_ERROR');
     }
-    if (this.errorLogger) {
-      this.errorLogger(connectionContext.socket, opId, errorPayload);
+    let formattedError: GraphQLFormattedError = error;
+    if (this.formatError) {
+      try {
+        formattedError = this.formatError(connectionContext.socket, opId, error);
+      } catch (error) {
+        console.error(`Error in formatError function: ${error.message}`);
+      }
     }
-    this.sendMessage(connectionContext, opId, sanitizedOverrideDefaultErrorType, errorPayload);
+    this.sendMessage(connectionContext, opId, sanitizedOverrideDefaultErrorType, formattedError);
   }
 }
