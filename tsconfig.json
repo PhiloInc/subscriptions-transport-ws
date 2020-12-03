@@ -11,6 +11,7 @@
     "removeComments": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    "strictNullChecks": true,
     "pretty": true,
     "declaration": true,
     "skipLibCheck": true,
